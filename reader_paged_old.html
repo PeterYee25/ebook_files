@@ -1,0 +1,1470 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <!-- JSZip for reading .epub (zip) files -->
+    <title>Paged Reader – CleanSource v5</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+
+    <script src="/lib/jszip.min.js"></script>
+
+    <style>
+        /* --- TTS word styling --- */
+        .tts-word {
+            white-space: pre-wrap;
+        }
+
+        .tts-current-word {
+            background: yellow;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            width: 100%;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: #000000; /* black around the book */
+            color: #222;
+        }
+
+        body {
+            display: flex;
+            align-items: stretch;
+            justify-content: center;
+        }
+
+        /* Outer app shell: top toolbar + book area */
+        #appShell {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            width: 100%;
+        }
+
+        /* Thin black strip at the very bottom of the frame, showing page number */
+        #pageFooterBar {
+            position: absolute;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            height: 32px;
+            background: #000000;
+            border-top: 1px solid #333;
+            color: #ffffff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.85rem;
+            pointer-events: none;
+        }
+
+        /* Area below the toolbar that holds the scalable book page */
+        #bookFrame {
+            flex: 1 1 auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #000000; /* black “letterbox” */
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* Book page we scale and center */
+        #bookPage {
+            position: relative;
+            background: #f7f3e8; /* soft cream paper */
+            box-shadow: 0 0 20px rgba(0,0,0,0.6);
+            overflow: hidden;
+        }
+
+        /* Static cover overlay – fill the entire book page */
+        .static-cover {
+            position: absolute;
+            top: 7%;
+            bottom: 6%;
+            left: 5%;
+            right: 5%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #f7f3e8;
+            z-index: 9999;
+        }
+
+        .static-cover-image {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            border-radius: 4px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.6);
+        }
+
+        /* Real pages (hidden until cover dismissed) */
+        #pageInner {
+            position: absolute;
+            top: 7%;
+            bottom: 6%;
+            left: 5%;
+            right: 5%;
+            display: none; /* shown after cover is dismissed */
+            flex-direction: column;
+            overflow: hidden;
+            background: #f7f3e8;
+        }
+
+        /* Reader inside the text block */
+        #readerShell {
+            position: relative;
+            flex: 1 1 auto;
+            padding: 0;
+            overflow: hidden;
+            background: #f7f3e8;
+            touch-action: auto;
+        }
+
+        /* page container */
+        #pageContainer {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            padding: 0.5rem 0.75rem 1.5rem;
+            overflow-y: scroll;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+            font-size: calc(1rem * var(--readerFontScale, 1));
+            touch-action: pan-y;
+        }
+
+            #pageContainer::-webkit-scrollbar {
+                display: none; /* Chrome/Safari/Edge */
+            }
+
+            #pageContainer p {
+                margin: 0.6rem 0;
+                line-height: 1.5;
+                text-align: justify;
+            }
+
+        /* Allow vertical pan only, block horizontal */
+        #bookFrame,
+        #bookPage,
+        #pageContainer {
+            touch-action: pan-y;
+        }
+
+            /* Central, scalable headings */
+            #pageContainer h1,
+            #pageContainer h2,
+            #pageContainer h3 {
+                text-align: center;
+            }
+
+                #pageContainer h1 .tts-word,
+                #pageContainer h2 .tts-word,
+                #pageContainer h3 .tts-word {
+                    display: inline;
+                }
+
+            #pageContainer h1 {
+                font-size: 1.4em;
+                font-weight: 700;
+            }
+
+            #pageContainer h2 {
+                font-size: 1.25em;
+                font-weight: 600;
+                margin-top: 1.4rem;
+                margin-bottom: 0.7rem;
+            }
+
+            #pageContainer h3 {
+                font-size: 1.1em;
+                font-weight: 600;
+                margin-top: 1.2rem;
+                margin-bottom: 0.5rem;
+            }
+
+                #pageContainer h1:first-child,
+                #pageContainer h2:first-child,
+                #pageContainer h3:first-child {
+                    margin-top: 0.8rem;
+                }
+
+        /* Give the last element some breathing room above the footer bar */
+        #pageContainer {
+            padding: 0.5rem 0.75rem 2rem;
+        }
+
+            #pageContainer > :last-child {
+                margin-bottom: 2rem;
+            }
+
+        /* global scale variable */
+        html {
+            --readerFontScale: 1; /* 100% */
+        }
+
+        .bottom-bar {
+            display: none !important;
+        }
+
+        .nav-button {
+            padding: 0.35rem 0.9rem;
+            border-radius: 999px;
+            border: 1px solid #ccc;
+            background: #ffffff;
+            cursor: pointer;
+            font-size: 0.85rem;
+            min-width: 90px;
+        }
+
+            .nav-button:disabled {
+                opacity: 0.4;
+                cursor: default;
+            }
+
+        .image-placeholder {
+            width: 100%;
+            height: 2rem;
+            background: #ddd;
+            margin: 1rem 0;
+            border-radius: 4px;
+        }
+
+        /* --- TOP BAR LAYOUT ------------------------------------------------- */
+
+        .top-bar {
+            flex: 0 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.35rem 0.8rem;
+            border-bottom: 1px solid #222;
+            background: #111;
+            color: #f5f5f5;
+            font-size: 0.8rem;
+            gap: 0.5rem;
+        }
+
+        .top-left,
+        .top-right {
+            flex: 0 0 8px;
+        }
+
+        .top-center {
+            flex: 1 1 auto;
+            display: flex;
+            justify-content: center;
+            gap: 0.6rem;
+            max-width: 480px;
+            margin: 0 auto;
+        }
+
+        .page-indicator {
+            font-variant-numeric: tabular-nums;
+            opacity: 0.9;
+            white-space: nowrap;
+        }
+
+        .status-pill {
+            font-size: 0.75rem;
+            padding: 0.1rem 0.5rem;
+            border-radius: 999px;
+            background: #333;
+            color: #f5f5f5;
+        }
+
+        .small-button,
+        .tts-button {
+            padding: 0.25rem 0.7rem;
+            border-radius: 999px;
+            border: 1px solid #444;
+            background: #222;
+            color: #f5f5f5;
+            cursor: pointer;
+            font-size: 0.8rem;
+            white-space: nowrap;
+        }
+
+            .small-button:disabled,
+            .tts-button:disabled {
+                opacity: 0.4;
+                cursor: default;
+            }
+
+        /* TOC combo */
+        .goto-select {
+            background: #FFFCE5;
+            border-radius: 999px;
+            padding: 0.15rem 0.7rem;
+            font-size: 0.85rem;
+            min-width: 220px;
+            max-width: 260px;
+            flex-grow: 0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+            .goto-select option {
+                font-size: 0.8rem;
+            }
+
+        /* FONT & SPEED strip */
+
+        .switch-bar {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .switch-group {
+            display: inline-flex;
+            align-items: center;
+            background: #FFFCE5;
+            border-radius: 999px;
+            padding: 0.1rem 0.35rem;
+            gap: 0.2rem;
+        }
+
+            .switch-group .small-button {
+                width: 22px;
+                height: 22px;
+                padding: 0;
+                border-radius: 4px;
+                border: none;
+                background: transparent;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                cursor: pointer;
+            }
+
+        .switch-readout {
+            padding: 0.1rem 0.55rem;
+            border-radius: 999px;
+            background: #000000;
+            color: #ffffff;
+            font-size: 0.8rem;
+            min-width: 3.0rem;
+            text-align: center;
+        }
+
+        .font-group .font-down {
+            font-weight: 700;
+            color: #c1121f;
+        }
+
+        .font-group .font-up {
+            font-weight: 700;
+            color: #0f6b2f;
+        }
+
+        .switch-group .small-button svg {
+            display: block;
+        }
+
+        #slowerBtn,
+        #fasterBtn {
+            display: none !important;
+        }
+
+        .bottom-shell {
+            flex: 0 0 auto;
+            padding: 0.3rem 0.8rem;
+            border-top: 1px solid #222;
+            background: #000;
+        }
+
+        @media (max-width: 540px) {
+            .top-center {
+                flex-direction: column;
+                align-items: center;
+                gap: 0.4rem;
+            }
+
+            .switch-bar {
+                flex-wrap: wrap;
+                justify-content: center;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="appShell">
+        <!-- Top toolbar (outside the page) -->
+        <header class="top-bar">
+            <div class="top-left"></div>
+
+            <div class="top-center">
+                <!-- TOC combo -->
+                <select id="tocSelect" class="goto-select"></select>
+
+                <!-- FONT + SPEED strip -->
+                <div class="switch-bar">
+
+                    <!-- FONT GROUP -->
+                    <div class="switch-group font-group">
+                        <button id="fontSmallerBtn"
+                                class="small-button font-down"
+                                title="Smaller text">
+                            A
+                        </button>
+
+                        <span class="switch-readout" id="fontStatus">100%</span>
+
+                        <button id="fontLargerBtn"
+                                class="small-button font-up"
+                                title="Larger text">
+                            A
+                        </button>
+                    </div>
+
+                    <!-- SPEED GROUP -->
+                    <div class="switch-group speed-group">
+                        <button id="speedDownBtn" class="small-button" title="Slower">
+                            <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+                                <path fill="#7f1d1d"
+                                      d="M6 2h12v3l-4 5 4 5v3H6v-3l4-5-4-5V2z" />
+                            </svg>
+                        </button>
+
+                        <span class="switch-readout" id="speedStatus">1.0×</span>
+
+                        <button id="speedUpBtn" class="small-button" title="Faster">
+                            <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+                                <path fill="#14532d"
+                                      d="M6 2h12v3l-4 5 4 5v3H6v-3l4-5-4-5V2z" />
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="top-right"></div>
+        </header>
+
+        <!-- Book area (black background, centered page) -->
+        <div id="bookFrame">
+            <div id="bookPage">
+                <div id="staticCover" class="static-cover">
+                    <img id="staticCoverImg"
+                         alt="Book Cover"
+                         class="static-cover-image" />
+                </div>
+
+                <!-- Real book pages, initially hidden until cover is dismissed -->
+                <div id="pageInner">
+                    <main id="readerShell">
+                        <!-- Actual page content -->
+                        <div id="pageContainer"></div>
+                    </main>
+                </div>
+            </div>
+
+            <div id="pageFooterBar">
+                <span class="page-indicator" id="pageIndicator">Page 1 / 1</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        /* ============================================================
+           EPUB READER CORE
+           ============================================================ */
+
+        const EPUB_PATH = "books/CleanSource-Paged.epub";
+
+        // Core DOM handles
+        const tocSelect = document.getElementById("tocSelect");
+        const pageContainer = document.getElementById("pageContainer");
+        const pageIndicator = document.getElementById("pageIndicator");
+        const fontStatus = document.getElementById("fontStatus");
+        const speedStatus = document.getElementById("speedStatus");
+
+        // EPUB state
+        let epubZip = null;
+        let epubSpine = [];
+        let epubOpfPath = null;
+        let currentSpineIndex = 0;
+        let showingStaticCover = true;
+        let firstTextSpineIndex = 0; // treated as Title page
+        let epubToc = [];            // [{ spineIndex, level, headingIndex, label }]
+
+        // FONT + SPEED
+        let fontScale = 1.0;
+        const MIN_FONT_SCALE = 0.6;
+        const MAX_FONT_SCALE = 1.5;
+        const FONT_STEP = 0.1;
+
+        let ttsRate = 1.0;
+        const MIN_TTS_RATE = 0.5;
+        const MAX_TTS_RATE = 3.0;
+        const TTS_STEP = 0.25;
+
+        // TTS state
+        let synth = window.speechSynthesis || null;
+        let currentUtterance = null;
+        let isReading = false;
+        let ttsActiveWords = [];
+        let ttsOffsets = [];
+        let ttsCurrentSpan = null;
+
+        /* ------------------------------------------------------------
+           Helpers
+           ------------------------------------------------------------ */
+
+        function findCoverForEpub(epubPath) {
+            const base = epubPath.replace(/^.*[\\/]/, "").replace(/\.epub$/i, "");
+            return `covers/${base}_cover.png`;
+        }
+
+        function isErrorPageHtml(doc) {
+            if (!doc || !doc.body) return false;
+            const rawText = doc.body.textContent || "";
+            const text = rawText.replace(/\s+/g, " ").trim().toLowerCase();
+            if (!text) return false;
+
+            const strongMarkers = [
+                "this page contains the following errors",
+                "below is a rendering of the page up to the first error",
+                "calibre, version",
+                "epub parsing error",
+                "error on line"
+            ];
+
+            const mildMarkers = [
+                "epub error",
+                "could not be rendered",
+                "could not display this page"
+            ];
+
+            const hasStrong = strongMarkers.some(m => text.includes(m));
+            const hasMild = mildMarkers.some(m => text.includes(m));
+            const isShort = text.length < 1500;
+
+            return hasStrong || (hasMild && isShort);
+        }
+
+        function injectReaderCss(doc) {
+            if (!doc) return;
+            const body = doc.body;
+            if (!body) return;
+
+            body.style.margin = "0";
+            body.style.padding = "0.5rem 0.75rem";
+            body.style.fontFamily = 'Georgia, "Times New Roman", serif';
+            body.style.fontSize = "1rem";
+            body.style.lineHeight = "1.5";
+            body.style.backgroundColor = "#f7f3e8";
+
+            const ps = body.querySelectorAll("p");
+            ps.forEach((p, idx) => {
+                p.style.margin = "0.6rem 0";
+                p.style.textAlign = "justify";
+                if (idx === 0) {
+                    p.style.textIndent = "0";
+                }
+            });
+
+            body.querySelectorAll('[class*="Mso"], [class*="mso"]').forEach(el => {
+                el.style.margin = "0.4rem 0";
+            });
+
+            body.querySelectorAll('[style*="position:absolute"], [style*="position: absolute"]').forEach(el => {
+                el.style.position = "static";
+                el.style.left = "";
+                el.style.top = "";
+            });
+        }
+
+        function resolveZipPath(opfPath, href) {
+            const lastSlash = opfPath.lastIndexOf("/");
+            const base = lastSlash >= 0 ? opfPath.substring(0, lastSlash + 1) : "";
+            return (base + href).replace(/\\/g, "/");
+        }
+
+        async function loadEpubFile() {
+            try {
+                const response = await fetch(EPUB_PATH);
+                if (!response.ok) throw new Error("Failed to fetch EPUB file: " + response.status);
+
+                const arrayBuffer = await response.arrayBuffer();
+                const zip = await JSZip.loadAsync(arrayBuffer);
+
+                const containerFile = zip.file("META-INF/container.xml");
+                if (!containerFile) {
+                    throw new Error("META-INF/container.xml not found in EPUB");
+                }
+
+                const containerXml = await containerFile.async("text");
+                const parser = new DOMParser();
+                const containerDoc = parser.parseFromString(containerXml, "application/xml");
+                const rootfileEl = containerDoc.querySelector("rootfile");
+                if (!rootfileEl) throw new Error("<rootfile> not found in container.xml");
+
+                const opfPath = rootfileEl.getAttribute("full-path");
+                if (!opfPath) throw new Error("No OPF full-path in container.xml");
+
+                const opfFile = zip.file(opfPath);
+                if (!opfFile) throw new Error("OPF file not found at " + opfPath);
+
+                const opfText = await opfFile.async("text");
+                const opfDoc = parser.parseFromString(opfText, "application/xml");
+
+                const manifestById = new Map();
+                opfDoc.querySelectorAll("manifest > item").forEach(item => {
+                    const id = item.getAttribute("id");
+                    const href = item.getAttribute("href");
+                    if (id && href) manifestById.set(id, href);
+                });
+
+                const spinePaths = [];
+                opfDoc.querySelectorAll("spine > itemref").forEach(itemref => {
+                    const idref = itemref.getAttribute("idref");
+                    const href = manifestById.get(idref);
+                    if (href) {
+                        const fullPath = resolveZipPath(opfPath, href);
+                        spinePaths.push(fullPath);
+                    }
+                });
+
+                if (!spinePaths.length) throw new Error("EPUB spine is empty");
+
+                console.log("[EPUB] OPF path:", opfPath);
+                console.log("[EPUB] spine files:", spinePaths);
+
+                return { zip, spine: spinePaths, opfPath };
+            } catch (err) {
+                console.error("EPUB load error:", err);
+                return null;
+            }
+        }
+
+        async function findFirstTextSpineIndex(zip, spine) {
+            // For now: treat spine[0] as title page
+            return 0;
+        }
+
+        async function fixImagesInHtml(htmlText, zip, basePath) {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(htmlText, "text/html");
+
+            // Remove external CSS / favicon links which may 404
+            doc.querySelectorAll(
+                'link[rel="stylesheet"], ' +
+                'link[rel="icon"], ' +
+                'link[href$="stylesheet.css"], ' +
+                'link[href$="page_styles.css"], ' +
+                'link[href$="favicon.ico"]'
+            ).forEach(link => link.remove());
+
+            const imgTags = doc.querySelectorAll("img[src]");
+
+            for (const img of imgTags) {
+                const origSrc = img.getAttribute("src");
+                if (!origSrc) continue;
+
+                if (/^(https?:)?\/\//i.test(origSrc) || origSrc.startsWith("data:")) {
+                    continue;
+                }
+
+                let folder = basePath || "";
+                if (folder && !folder.endsWith("/")) {
+                    folder += "/";
+                }
+
+                const normalizedSrc = origSrc.replace(/^\.?\//, "");
+                const zipPath = (folder + normalizedSrc).replace(/\\/g, "/");
+                const fileInZip = zip.file(zipPath);
+
+                if (!fileInZip) {
+                    console.warn("[EPUB] image not found in zip, replacing with local PNG:", zipPath);
+
+                    const replacementMap = {
+                        "image.png": "covers/CleanSource-Paged_img1.png",
+                        "image-1.png": "covers/CleanSource-Paged_img2.png"
+                    };
+
+                    const fileName = origSrc.split("/").pop();
+                    const localReplacement = replacementMap[fileName];
+
+                    if (localReplacement) {
+                        const newImg = document.createElement("img");
+                        newImg.src = localReplacement;
+                        newImg.style.width = "100%";
+                        newImg.style.display = "block";
+                        newImg.style.margin = "1rem 0";
+                        img.replaceWith(newImg);
+                    } else {
+                        const ph = document.createElement("div");
+                        ph.className = "image-placeholder";
+                        img.replaceWith(ph);
+                    }
+
+                    continue;
+                }
+
+                const blob = await fileInZip.async("blob");
+                const localUrl = URL.createObjectURL(blob);
+                img.src = localUrl;
+            }
+
+            injectReaderCss(doc);
+
+            if (isErrorPageHtml(doc)) {
+                const wrapper = document.createElement("div");
+                wrapper.textContent =
+                    "[This EPUB page contained a rendering error and was skipped.]";
+                return wrapper.outerHTML;
+            }
+
+            return doc.body ? doc.body.innerHTML : "";
+        }
+
+        function hideStaticCoverIfNeeded() {
+            if (!showingStaticCover) return;
+
+            const cover = document.getElementById("staticCover");
+            const pageInner = document.getElementById("pageInner");
+            if (cover) cover.style.display = "none";
+            if (pageInner) pageInner.style.display = "flex";
+
+            showingStaticCover = false;
+
+            if (epubSpine && epubSpine.length && pageIndicator) {
+                pageIndicator.textContent = `Page ${currentSpineIndex + 1} / ${epubSpine.length}`;
+            }
+        }
+
+        /* ------------------------------------------------------------
+           TOC: build from H1–H3 in each spine page
+           ------------------------------------------------------------ */
+
+        async function buildToc() {
+            epubToc = [];
+            console.log("[TOC] buildToc: start");
+
+            for (let i = 0; i < epubSpine.length; i++) {
+                const spinePath = epubSpine[i];
+                const file = epubZip.file(spinePath);
+                if (!file) {
+                    console.warn("[TOC] buildToc: no file for spine index", i, spinePath);
+                    continue;
+                }
+
+                const html = await file.async("text");
+                const doc = new DOMParser().parseFromString(html, "text/html");
+
+                const headings = doc.querySelectorAll("h1, h2, h3");
+                if (!headings.length) continue;
+
+                const levelCounters = { h1: 0, h2: 0, h3: 0 };
+
+                headings.forEach(h => {
+                    const level = h.tagName.toLowerCase();
+                    const label = h.textContent.trim();
+                    const idxInLevel = levelCounters[level] ?? 0;
+                    levelCounters[level] = idxInLevel + 1;
+
+                    epubToc.push({
+                        spineIndex: i,
+                        level,
+                        headingIndex: idxInLevel,
+                        label
+                    });
+
+                    console.log("[TOC] found", level, ":", label, "in spine", i);
+                });
+            }
+
+            console.log("[TOC] buildToc: finished, entries:", epubToc.length);
+            populateTocDropdown();
+        }
+
+        function populateTocDropdown() {
+            if (!tocSelect) {
+                console.warn("[TOC] populateTocDropdown: #tocSelect not found");
+                return;
+            }
+
+            tocSelect.innerHTML = "";
+            console.log("[TOC] populateTocDropdown: entries =", epubToc.length);
+
+            epubToc.forEach((entry, idx) => {
+                const opt = document.createElement("option");
+                opt.value = String(idx);
+
+                let prefix = "";
+                if (entry.level === "h2") prefix = "  • ";
+                if (entry.level === "h3") prefix = "    ▸ ";
+
+                opt.textContent = prefix + entry.label;
+                tocSelect.appendChild(opt);
+
+                if (idx < 20) {
+                    console.log("[TOC] option", idx, "=>", opt.value, opt.textContent);
+                }
+            });
+        }
+
+        tocSelect.addEventListener("change", async () => {
+            const idx = Number(tocSelect.value);
+            if (Number.isNaN(idx)) return;
+
+            const entry = epubToc[idx];
+            if (!entry) return;
+
+            if (showingStaticCover) hideStaticCoverIfNeeded();
+
+            await renderSpinePage(entry.spineIndex);
+
+            const container = pageContainer;
+            if (!container) return;
+
+            let headings = container.querySelectorAll(entry.level);
+            let target = headings[entry.headingIndex];
+
+            if (!target) {
+                target = Array.from(
+                    container.querySelectorAll("h1, h2, h3")
+                ).find(h => h.textContent.trim() === entry.label);
+            }
+
+            if (target) {
+                target.scrollIntoView({ block: "center", behavior: "auto" });
+                console.log("[TOC] Scrolled to:", entry.label);
+            } else {
+                console.warn("[TOC] Heading not found for:", entry.label);
+            }
+        });
+
+        /* ------------------------------------------------------------
+           RENDER A SPINE PAGE
+           ------------------------------------------------------------ */
+
+        async function renderSpinePage(spineIndex) {
+            if (!epubZip || !epubSpine.length) {
+                throw new Error("EPUB not initialised");
+            }
+
+            if (spineIndex < 0) spineIndex = 0;
+            if (spineIndex >= epubSpine.length) spineIndex = epubSpine.length - 1;
+
+            currentSpineIndex = spineIndex;
+
+            const spinePath = epubSpine[spineIndex];
+            const file = epubZip.file(spinePath);
+            if (!file) throw new Error("Spine item not found in ZIP: " + spinePath);
+
+            let htmlText = await file.async("text");
+
+            const lastSlash = spinePath.lastIndexOf("/");
+            const basePath = (lastSlash >= 0) ? spinePath.substring(0, lastSlash + 1) : "";
+
+            htmlText = await fixImagesInHtml(htmlText, epubZip, basePath);
+
+            pageContainer.innerHTML = htmlText;
+            pageContainer.scrollTop = 0;
+
+            // Title page (firstTextSpineIndex) should not scroll
+            if (currentSpineIndex === firstTextSpineIndex) {
+                pageContainer.style.overflowY = "hidden";
+            } else {
+                pageContainer.style.overflowY = "scroll";
+            }
+
+            wrapWordsForTTS();
+
+            if (!showingStaticCover && pageIndicator) {
+                pageIndicator.textContent = `Page ${spineIndex + 1} / ${epubSpine.length}`;
+            }
+        }
+
+        async function goNextPage() {
+            if (showingStaticCover) {
+                hideStaticCoverIfNeeded();
+                return;
+            }
+
+            // Special: Title page → always go to next spine, no scroll
+            if (currentSpineIndex === firstTextSpineIndex) {
+                if (currentSpineIndex < epubSpine.length - 1) {
+                    stopReading();
+                    await renderSpinePage(currentSpineIndex + 1);
+                }
+                return;
+            }
+
+            if (pageContainer) {
+                const visible = pageContainer.clientHeight;
+                const top = pageContainer.scrollTop;
+                const total = pageContainer.scrollHeight;
+                const remaining = total - (top + visible);
+                const THRESHOLD = 10;
+
+                if (remaining > THRESHOLD) {
+                    pageContainer.scrollBy({
+                        top: visible * 0.9,
+                        behavior: "smooth"
+                    });
+                    return;
+                }
+            }
+
+            if (!epubSpine.length) return;
+            if (currentSpineIndex >= epubSpine.length - 1) return;
+
+            stopReading();
+            await renderSpinePage(currentSpineIndex + 1);
+        }
+
+        async function goPrevPage() {
+            if (showingStaticCover) return;
+
+            // If at Title page, go back to cover
+            if (currentSpineIndex === firstTextSpineIndex) {
+                const cover = document.getElementById("staticCover");
+                const pageInner = document.getElementById("pageInner");
+                if (cover) cover.style.display = "flex";
+                if (pageInner) pageInner.style.display = "none";
+                showingStaticCover = true;
+                if (pageIndicator) {
+                    pageIndicator.textContent = "Cover";
+                }
+                return;
+            }
+
+            if (pageContainer) {
+                const visible = pageContainer.clientHeight;
+                const top = pageContainer.scrollTop;
+                const THRESHOLD = 10;
+
+                if (top > THRESHOLD) {
+                    pageContainer.scrollBy({
+                        top: -visible * 0.9,
+                        behavior: "smooth"
+                    });
+                    return;
+                }
+            }
+
+            if (!epubSpine.length) return;
+            if (currentSpineIndex <= 0) return;
+
+            stopReading();
+            await renderSpinePage(currentSpineIndex - 1);
+        }
+
+        /* ------------------------------------------------------------
+           TTS HIGHLIGHT HELPERS
+           ------------------------------------------------------------ */
+
+        function clearHighlight() {
+            if (ttsCurrentSpan) {
+                ttsCurrentSpan.classList.remove("tts-current-word");
+                ttsCurrentSpan = null;
+            }
+        }
+
+        function highlightWordByIndex(idx) {
+            if (!ttsActiveWords || !ttsActiveWords.length) return;
+            const span = ttsActiveWords[idx];
+            if (!span) return;
+
+            if (ttsCurrentSpan) {
+                ttsCurrentSpan.classList.remove("tts-current-word");
+            }
+            span.classList.add("tts-current-word");
+            ttsCurrentSpan = span;
+
+            span.scrollIntoView({ block: "center", behavior: "smooth" });
+        }
+
+        function wrapWordsForTTS() {
+            function wrap(node) {
+                if (node.nodeType === Node.TEXT_NODE) {
+                    const text = node.textContent;
+                    if (!text.trim()) return;
+
+                    const frag = document.createDocumentFragment();
+                    const parts = text.split(/(\s+)/);
+
+                    parts.forEach(p => {
+                        if (p.trim() === "") {
+                            frag.appendChild(document.createTextNode(p));
+                        } else {
+                            const span = document.createElement("span");
+                            span.className = "tts-word";
+                            span.textContent = p;
+                            frag.appendChild(span);
+                        }
+                    });
+
+                    node.replaceWith(frag);
+                    return;
+                }
+
+                if (node.nodeType === Node.ELEMENT_NODE) {
+                    [...node.childNodes].forEach(wrap);
+                }
+            }
+
+            wrap(pageContainer);
+        }
+
+        function buildUtteranceFromWordIndex(startIndex) {
+            const allWords = Array.from(pageContainer.querySelectorAll(".tts-word"));
+            if (!allWords.length) return null;
+
+            const slice = allWords.slice(startIndex);
+            if (!slice.length) return null;
+
+            ttsActiveWords = slice;
+
+            const wordsText = slice.map(w => w.textContent || "");
+            const text = wordsText.join(" ");
+            if (!text.trim()) return null;
+
+            ttsOffsets = [];
+            let pos = 0;
+            for (let i = 0; i < wordsText.length; i++) {
+                ttsOffsets.push(pos);
+                pos += wordsText[i].length + 1;
+            }
+
+            const utter = new SpeechSynthesisUtterance(text);
+            utter.rate = ttsRate;
+            const thisUtter = utter;
+
+            utter.onboundary = (event) => {
+                if (currentUtterance !== thisUtter) return;
+                if (event.charIndex == null) return;
+
+                const c = event.charIndex;
+                let idx = 0;
+                for (let i = 0; i < ttsOffsets.length; i++) {
+                    const start = ttsOffsets[i];
+                    const next = (i + 1 < ttsOffsets.length) ? ttsOffsets[i + 1] : Infinity;
+                    if (c >= start && c < next) {
+                        idx = i;
+                        break;
+                    }
+                }
+                highlightWordByIndex(idx);
+            };
+
+            utter.onend = () => {
+                if (currentUtterance !== thisUtter) return;
+                isReading = false;
+                clearHighlight();
+
+                if (epubSpine.length && currentSpineIndex < epubSpine.length - 1) {
+                    (async () => {
+                        await renderSpinePage(currentSpineIndex + 1);
+                        const nextUtter = buildUtteranceFromWordIndex(0);
+                        if (nextUtter) {
+                            currentUtterance = nextUtter;
+                            isReading = true;
+                            synth.speak(nextUtter);
+                        }
+                    })();
+                }
+            };
+
+            utter.onerror = () => {
+                if (currentUtterance !== thisUtter) return;
+                isReading = false;
+                clearHighlight();
+            };
+
+            return utter;
+        }
+
+        function startReadingCurrentPage() {
+            if (!synth) {
+                alert("Text-to-speech is not supported in this browser.");
+                return;
+            }
+            if (isReading) stopReading();
+
+            const utter = buildUtteranceFromWordIndex(0);
+            if (!utter) return;
+
+            currentUtterance = utter;
+            isReading = true;
+            synth.speak(utter);
+        }
+
+        function stopReading() {
+            if (!synth) return;
+            if (isReading || synth.speaking) synth.cancel();
+            isReading = false;
+            currentUtterance = null;
+            clearHighlight();
+        }
+
+        function startReadingFromClick(ev) {
+            if (!ev || ev.clientX == null || ev.clientY == null) {
+                startReadingCurrentPage();
+                return;
+            }
+
+            stopReading();
+
+            const rect = pageContainer.getBoundingClientRect();
+            const x = ev.clientX;
+            const y = Math.min(Math.max(ev.clientY, rect.top + 2), rect.bottom - 2);
+
+            let el = document.elementFromPoint(x, y);
+            if (!el) {
+                startReadingCurrentPage();
+                return;
+            }
+
+            let wordSpan = el.closest(".tts-word");
+
+            if (!wordSpan) {
+                const allWords = Array.from(pageContainer.querySelectorAll(".tts-word"));
+                let best = null;
+                let bestDist = Infinity;
+
+                for (const span of allWords) {
+                    const r = span.getBoundingClientRect();
+                    if (y < r.top - 4 || y > r.bottom + 4) continue;
+
+                    const cx = r.left + r.width / 2;
+                    const dist = Math.abs(x - cx);
+                    if (dist < bestDist) {
+                        bestDist = dist;
+                        best = span;
+                    }
+                }
+
+                wordSpan = best;
+            }
+
+            if (!wordSpan) {
+                startReadingCurrentPage();
+                return;
+            }
+
+            const allWords = Array.from(pageContainer.querySelectorAll(".tts-word"));
+            const startIndex = allWords.indexOf(wordSpan);
+            if (startIndex < 0) {
+                startReadingCurrentPage();
+                return;
+            }
+
+            const utter = buildUtteranceFromWordIndex(startIndex);
+            if (!utter) return;
+
+            currentUtterance = utter;
+            isReading = true;
+            synth.speak(utter);
+        }
+
+        /* ------------------------------------------------------------
+           FONT + SPEED UI
+           ------------------------------------------------------------ */
+
+        function applyFontScale() {
+            document.documentElement.style.setProperty(
+                "--readerFontScale",
+                String(fontScale)
+            );
+            if (fontStatus) {
+                fontStatus.textContent = Math.round(fontScale * 100) + "%";
+            }
+        }
+
+        function increaseFont() {
+            fontScale = Math.min(MAX_FONT_SCALE, fontScale + FONT_STEP);
+            applyFontScale();
+        }
+
+        function decreaseFont() {
+            fontScale = Math.max(MIN_FONT_SCALE, fontScale - FONT_STEP);
+            applyFontScale();
+        }
+
+        function applyTtsRate() {
+            if (!speedStatus) return;
+            const display = Math.round(ttsRate * 10) / 10;
+            speedStatus.textContent = display.toFixed(1) + "×";
+        }
+
+        function increaseSpeed() {
+            ttsRate = Math.min(MAX_TTS_RATE, ttsRate + TTS_STEP);
+            applyTtsRate();
+            if (isReading) startReadingCurrentPage();
+        }
+
+        function decreaseSpeed() {
+            ttsRate = Math.max(MIN_TTS_RATE, ttsRate - TTS_STEP);
+            applyTtsRate();
+            if (isReading) startReadingCurrentPage();
+        }
+
+        /* ------------------------------------------------------------
+           PAGE FRAME (9:6)
+           ------------------------------------------------------------ */
+
+        function resizeBookPage() {
+            const frame = document.getElementById("bookFrame");
+            const page = document.getElementById("bookPage");
+            if (!frame || !page) return;
+
+            const vw = frame.clientWidth;
+            const vh = frame.clientHeight;
+            const targetRatio = 9 / 6;
+
+            let pageWidth, pageHeight;
+
+            if (vh / vw > targetRatio) {
+                pageWidth = vw;
+                pageHeight = vw * targetRatio;
+            } else {
+                pageHeight = vh;
+                pageWidth = vh / targetRatio;
+            }
+
+            const margin = 16;
+            pageWidth = Math.max(0, pageWidth - margin);
+            pageHeight = Math.max(0, pageHeight - margin);
+
+            page.style.width = pageWidth + "px";
+            page.style.height = pageHeight + "px";
+        }
+
+        /* ------------------------------------------------------------
+           WIRE CONTROLS
+           ------------------------------------------------------------ */
+
+        function setupControls() {
+            const readerShell = document.getElementById("readerShell");
+            const staticCover = document.getElementById("staticCover");
+            const fontSmallerBtn = document.getElementById("fontSmallerBtn");
+            const fontLargerBtn = document.getElementById("fontLargerBtn");
+            const speedDownBtn = document.getElementById("speedDownBtn");
+            const speedUpBtn = document.getElementById("speedUpBtn");
+
+            // Cover: single tap → hide cover (no TTS)
+            if (staticCover) {
+                staticCover.addEventListener("click", () => {
+                    hideStaticCoverIfNeeded();
+                });
+            }
+
+            // Keyboard paging
+            window.addEventListener("keydown", ev => {
+                if (showingStaticCover &&
+                    (ev.key === "ArrowRight" || ev.key === " " || ev.key === "Enter")) {
+                    hideStaticCoverIfNeeded();
+                    return;
+                }
+
+                if (ev.key === "ArrowRight") goNextPage();
+                else if (ev.key === "ArrowLeft") goPrevPage();
+            });
+
+            // Font size adjustments
+            if (fontSmallerBtn) {
+                fontSmallerBtn.addEventListener("click", e => {
+                    e.preventDefault();
+                    decreaseFont();
+                });
+            }
+
+            if (fontLargerBtn) {
+                fontLargerBtn.addEventListener("click", e => {
+                    e.preventDefault();
+                    increaseFont();
+                });
+            }
+
+            // TTS speed adjustments
+            if (speedDownBtn) {
+                speedDownBtn.addEventListener("click", e => {
+                    e.preventDefault();
+                    decreaseSpeed();
+                });
+            }
+
+            if (speedUpBtn) {
+                speedUpBtn.addEventListener("click", e => {
+                    e.preventDefault();
+                    increaseSpeed();
+                });
+            }
+
+            // Single tap in page area:
+            // - on Title page: go next
+            // - elsewhere: do nothing (scroll-only)
+            if (pageContainer) {
+                pageContainer.addEventListener("click", ev => {
+                    if (ev.target.closest("select, button, input, textarea, a")) {
+                        return;
+                    }
+                    if (showingStaticCover) return;
+
+                    if (currentSpineIndex === firstTextSpineIndex) {
+                        // Title page click → next
+                        goNextPage();
+                    }
+                });
+            }
+
+            // Double-tap (double-click) TTS toggle on *content* pages only
+            if (readerShell) {
+                readerShell.addEventListener("dblclick", e => {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+
+                    if (showingStaticCover) {
+                        hideStaticCoverIfNeeded();
+                        return;
+                    }
+
+                    // No TTS on title page
+                    if (currentSpineIndex === firstTextSpineIndex) {
+                        return;
+                    }
+
+                    if (isReading) {
+                        stopReading();
+                    } else {
+                        startReadingFromClick(e);
+                    }
+                });
+            }
+
+            applyFontScale();
+            applyTtsRate();
+        }
+
+        /* ------------------------------------------------------------
+           INIT
+           ------------------------------------------------------------ */
+
+        async function initPagedReader() {
+            resizeBookPage();
+
+            const coverSrc = findCoverForEpub(EPUB_PATH);
+            const coverImg = document.getElementById("staticCoverImg");
+            if (coverImg) {
+                coverImg.src = coverSrc;
+            }
+
+            try {
+                const epub = await loadEpubFile();
+                if (!epub) {
+                    pageContainer.innerHTML = "<p style='color:red'>Unable to load EPUB.</p>";
+                    return;
+                }
+
+                epubZip = epub.zip;
+                epubSpine = epub.spine;
+                epubOpfPath = epub.opfPath;
+
+                await buildToc();
+
+                const firstIndex = await findFirstTextSpineIndex(epubZip, epubSpine);
+                firstTextSpineIndex = firstIndex;
+                await renderSpinePage(firstIndex);
+
+                if (pageIndicator) {
+                    pageIndicator.textContent = "Cover";
+                }
+
+                setupControls();
+            } catch (err) {
+                console.error("[EPUB] init error:", err);
+                pageContainer.innerHTML = "<p style='color:red'>Unable to load EPUB.</p>";
+            }
+        }
+
+        window.addEventListener("resize", resizeBookPage);
+        window.addEventListener("orientationchange", resizeBookPage);
+        document.addEventListener("DOMContentLoaded", initPagedReader);
+    </script>
+
+    <script>
+        // Pinch-to-zoom for font size on touchscreens
+        document.addEventListener("DOMContentLoaded", () => {
+            const pc = document.getElementById("pageContainer");
+            if (!pc) {
+                console.warn("Pinch font: #pageContainer not found.");
+                return;
+            }
+
+            const activePointers = new Map();
+            let pinchStartDistance = null;
+            let pinchStartScale = fontScale;
+
+            function getDistance(p1, p2) {
+                const dx = p1.x - p2.x;
+                const dy = p1.y - p2.y;
+                return Math.sqrt(dx * dx + dy * dy);
+            }
+
+            function clamp(v, min, max) {
+                return Math.min(max, Math.max(min, v));
+            }
+
+            pc.addEventListener("pointerdown", ev => {
+                if (ev.pointerType !== "touch") return;
+
+                activePointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+
+                if (activePointers.size === 2) {
+                    const pts = Array.from(activePointers.values());
+                    pinchStartDistance = getDistance(pts[0], pts[1]);
+                    pinchStartScale = fontScale;
+                }
+            });
+
+            pc.addEventListener("pointermove", ev => {
+                if (ev.pointerType !== "touch") return;
+                if (!activePointers.has(ev.pointerId)) return;
+
+                activePointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+
+                if (activePointers.size === 2 && pinchStartDistance) {
+                    const pts = Array.from(activePointers.values());
+                    const distance = getDistance(pts[0], pts[1]);
+                    if (distance <= 0) return;
+
+                    const factor = distance / pinchStartDistance;
+                    const newScale = pinchStartScale * factor;
+
+                    fontScale = clamp(newScale, MIN_FONT_SCALE, MAX_FONT_SCALE);
+                    applyFontScale();
+
+                    if (ev.cancelable) ev.preventDefault();
+                }
+            });
+
+            function endPointer(ev) {
+                activePointers.delete(ev.pointerId);
+                if (activePointers.size < 2) {
+                    pinchStartDistance = null;
+                    pinchStartScale = fontScale;
+                }
+            }
+
+            pc.addEventListener("pointerup", endPointer);
+            pc.addEventListener("pointercancel", endPointer);
+            pc.addEventListener("pointerleave", endPointer);
+            pc.addEventListener("pointerout", endPointer);
+
+            applyFontScale();
+        });
+    </script>
+</body>
+</html>
