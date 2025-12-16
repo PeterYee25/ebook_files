@@ -43,13 +43,20 @@ const tocSelect = document.getElementById("tocSelect");
 const pageIndicator = document.getElementById("pageIndicator");
 let epubZip = null;
 let epubOpfPath = null;
+async function renderInitialSpinePage() {
+    let spineItem = spine[currentSpineIndex]; // or however you're selecting the spine item
+    let htmlText = await zip.file(spineItem.href).async("string");
 
-
-   if (pageContainer) {
-    pageContainer.innerHTML = htmlText;
-    pageContainer.scrollTop = 0;
-    pageContainer.style.overflowY = (currentSpineIndex === firstTextSpineIndex) ? "hidden" : "scroll";
+    if (pageContainer) {
+        pageContainer.innerHTML = htmlText;
+        pageContainer.scrollTop = 0;
+        pageContainer.style.overflowY = (currentSpineIndex === firstTextSpineIndex) ? "hidden" : "scroll";
+    }
 }
+
+// ✅ Call the function
+renderInitialSpinePage();
+
 
 // strip standalone asterisk separators of 3 or more characters (safer, general)
 try {
@@ -348,7 +355,6 @@ function isErrorPageHtml(doc) {
 }
 
 async function fixImagesInHtml(htmlText, zip, basePath) {
-    let htmlText = await zip.file(spineItem.href).async("string");
     const parser = new DOMParser();
     const doc = parser.parseFromString(htmlText, "text/html");
 
@@ -1580,6 +1586,12 @@ async function loadEpubFile() {
    - applies base reading styles
    - checks for error pages
 */
+
+async function loadSpineItem(zip, basePath) {
+    let spineItem = spine[currentSpineIndex]; // or however you're selecting the spine item
+    let htmlText = await zip.file(spineItem.href).async("string");
+    fixImagesInHtml(htmlText, zip, basePath);
+}
 async function fixImagesInHtml(htmlText, zip, basePath) {
     const parser = new DOMParser();
     const doc = parser.parseFromString(htmlText, "text/html");
