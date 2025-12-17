@@ -903,24 +903,47 @@ async function goPrevPage() {
 }
 
 // ---------------- TTS wrappers ----------------
-function safeStartReading() {
-    if (typeof window.startReading === "function") {
-        try { window.startReading(); window.TTSon = 1; return; } catch (e) { console.warn("startReading threw", e); }
-    }
-    if (!window.speechSynthesis) { console.warn("No speechSynthesis available"); return; }
-    try {
-        const text = pageContainer ? pageContainer.innerText.trim() : "";
-        if (!text) return;
-        window.speechSynthesis.cancel();
-        const utt = new SpeechSynthesisUtterance(text);
-        utt.rate = (typeof window.ttsRate === "number") ? window.ttsRate : 1.0;
-        utt.onend = () => { window.TTSon = 0; };
-        window.speechSynthesis.speak(utt);
-        window.TTSon = 1;
-    } catch (err) {
-        console.error("safeStartReading error:", err);
-    }
+pageContainer.scrollBy({
+    top: -visible * 0.9,
+    behavior: "smooth"
+});
+return;
+                }
+            }
+if (!epubSpine.length) return;
+if (currentSpineIndex <= 0) return;
+safeStopReading();
+await renderSpinePage(currentSpineIndex - 1);
+        }
+
+
+// Fallback to a simple SpeechSynthesis reading of the visible page text (no per-word highlight)
+if (!window.speechSynthesis) {
+    console.warn("No speechSynthesis available for fallback TTS.");
+    return;
 }
+try {
+    const text = pageContainer ? pageContainer.innerText.trim() : "";
+    if (!text) return;
+    window.speechSynthesis.cancel();
+    const utt = new SpeechSynthesisUtterance(text);
+    utt.rate = (typeof window.ttsRate === "number") ? window.ttsRate : 1.0;
+    utt.onend = () => { window.TTSon = 0; };
+    window.speechSynthesis.speak(utt);
+    window.TTSon = 1;
+} catch (err) {
+    console.error("safeStartReading error:", err);
+}
+        }
+
+function safeStopReading() {
+    if (typeof window.stopReading === "function") {
+        try {
+            window.stopReading();
+            window.TTSon = 0;
+            return;
+        } catch (err) {
+            console.warn("stopReading() threw:", err);
 
 function safeStopReading() {
     if (typeof window.stopReading === "function") {
