@@ -10,6 +10,9 @@
 
     <style>
         /* --- TTS word styling --- */
+
+
+
         .tts-word {
             white-space: pre-wrap;
         }
@@ -54,6 +57,8 @@
             flex-direction: column;
             height: 100%;
             width: 100%;
+            padding-bottom: 0 !important;
+            margin-bottom: 0 !important;
         }
 
         /* Flag system */
@@ -87,6 +92,13 @@
             pointer-events: none;
         }
 
+        #pageFooterBar,
+        .pageFooterBar,
+        #pageIndicator,
+        .page-indicator {
+            display: none !important;
+        }
+
         /* Area below the toolbar that holds the scalable book page */
         #bookFrame {
             flex: 1 1 auto;
@@ -94,8 +106,13 @@
             align-items: center;
             justify-content: center;
             background: #000000;
+            background: transparent !important; /* previously #000000 */
             overflow: hidden;
             position: relative;
+            overflow-y: auto;
+            overflow-x: hidden;
+            touch-action: pan-y;
+            border-bottom: none !important;
         }
 
         #bookPage {
@@ -159,6 +176,10 @@
             opacity: 0;
             pointer-events: none;
             visibility: hidden;
+            height: auto !important;
+            min-height: auto !important;
+            overflow-y: visible !important;
+            overflow-x: visible !important;
         }
 
         /* Reader inside the text block */
@@ -480,7 +501,55 @@
             z-index: 10 !important;
             background: #fff !important;
             color: #222 !important;
+            flex: none !important;
         }
+
+        html, body, #bookFrame, #bookPage, #pageInner, #readerShell, #pageContainer, .epub-page {
+            background: none !important;
+            background-image: none !important;
+        }
+
+        /* 1. Baseline protection */
+        .epub-page {
+            display: block;
+            padding: 1.5rem;
+            color: #222;
+            font-size: 1rem;
+            line-height: 1.6;
+            visibility: visible !important;
+            opacity: 1 !important;
+            background: transparent !important;
+            page-break-after: auto !important;
+            border-bottom: none !important;
+        }
+
+            /* 2. Reset everything inside */
+            .epub-page * {
+                visibility: visible !important;
+                opacity: 1 !important;
+                color: inherit !important;
+                font-size: inherit !important;
+                line-height: inherit !important;
+                page-break-after: auto !important;
+                border-bottom: none !important;
+            }
+
+            .epub-page img {
+                max-width: 100%;
+                height: auto;
+                display: block;
+                margin: 1rem auto;
+            }
+
+            .epub-page img,
+            #pageContainer img {
+                max-width: 100% !important;
+                height: auto !important;
+                display: block !important;
+                position: relative !important;
+                float: none !important;
+            }
+
 
     </style>
 </head>
@@ -546,7 +615,7 @@
         </header>
 
         <!-- Book area (black background, centered page) -->
-        <div id="bookFrame">
+        <div id="bookFrame" tabindex="0">
             <div id="bookPage">
                 <div id="staticCover" class="static-cover">
                     <img id="staticCoverImg"
@@ -610,6 +679,12 @@
             "titlepage.xhtml": "start",
             "index_split_000.html": "skip"
         };
+
+        // Opening covers
+        let coverShown = 0;       // 0 = cover visible, 1 = cover dismissed
+        let titlePageShown = 0;   // 0 = title page not yet advanced, 1 = title page clicked
+        let bookFrame = 0;
+        let endnoteOpen = 0;
 
         // Font/speed
         let fontScale = 1.0;
@@ -948,7 +1023,17 @@
 
                 // Load static cover
                 const bookName = EPUB_PATH.split("/").pop().replace(".epub", "");
-                staticCoverImg.src = `/covers/${bookName}_cover.png`;
+                const coverUrl = `/covers/${bookName}_cover.png`;
+
+                fetch(coverUrl, { method: "HEAD" })
+                    .then(res => {
+                        if (res.ok) {
+                            staticCoverImg.src = coverUrl;
+                        } else {
+                            staticCoverImg.remove(); // prevent broken icon
+                        }
+                    })
+                    .catch(() => staticCoverImg.remove());
 
                 // *** CALL IT HERE ***
                 showCover(staticCoverImg.src);
@@ -1030,6 +1115,8 @@
 
         /* --------------- Render spine page --------------- */
         async function renderSpinePage(spineIndex) {
+
+
             console.log("[renderSpinePage] spineIndex:", spineIndex, "item:", epubSpine[spineIndex]);
 
             if (!epubZip || !epubSpine.length) {
@@ -1050,9 +1137,13 @@
             }
 
             let htmlText = await file.async("text");
+            // DEBUG: log the raw XHTML exactly as it exists inside the EPUB
+            console.log("[DEBUG] RAW htmlText:", htmlText);
 
             const lastSlash = spinePath.lastIndexOf("/");
             const basePath = (lastSlash >= 0) ? spinePath.substring(0, lastSlash + 1) : "";
+
+            const isTitlePage = spinePath.includes("index_split_000");
 
             try {
                 console.log("[renderSpinePage] htmlText length:", htmlText?.length);
@@ -1061,11 +1152,63 @@
                 console.warn("Image fix failed:", err);
             }
 
-            const container = document.getElementById('pageContainer');
-            if (!container) return;
+            // Sanitize and wrap XHTML before injecting
+            const temp = document.createElement('div');
+            temp.innerHTML = htmlText;
 
-            // inject XHTML into the dedicated container
-            container.innerHTML = htmlText;
+            // Remove broken <img> tags
+            temp.querySelectorAll('img').forEach(img => {
+                if (!img.src || img.src.includes('cover.jpg')) {
+                    img.remove();
+                }
+            });
+
+            // Remove broken <image> tags only
+            temp.querySelectorAll('image').forEach(img => {
+                const href = img.getAttribute('xlink:href') || img.getAttribute('href');
+                if (!href || href.trim() === "" || href.includes("*****")) {
+                    img.remove();
+                }
+            });
+
+            // Remove empty <svg> only if it has no children
+            temp.querySelectorAll('svg').forEach(svg => {
+                if (!svg.querySelector('image')) {
+                    svg.remove();
+                }
+            });
+
+            // ---------------------------------------------
+            // DETECT AND SKIP IMAGE-ONLY PAGES (like titlepage.xhtml)
+            // ---------------------------------------------
+            const hasText = temp.textContent.trim().length > 0;
+            const hasTextBlocks = temp.querySelector("p, h1, h2, h3, h4, h5, h6, li, blockquote");
+            const hasImages = temp.querySelector("img, image, svg");
+
+            const isImageOnly = hasImages && !hasText && !hasTextBlocks;
+
+            if (isImageOnly) {
+                console.log("[renderSpinePage] Skipping image-only page at spineIndex", spineIndex);
+                return renderSpinePage(spineIndex + 1);
+            }
+
+            const container = document.getElementById('pageInner');
+            if (!container) {
+                console.error("[renderSpinePage] ERROR: pageInner not found in DOM");
+                return;
+            }
+
+            // Inject sanitized XHTML into the dedicated container
+            container.innerHTML = `<div class="epub-page">${temp.innerHTML}</div>`;
+            console.log("[DEBUG] After inject, .epub-page exists:", container.querySelector(".epub-page"));
+            const pageContainer = document.getElementById("pageContainer");
+
+            if (isTitlePage) {
+                pageContainer.classList.add("is-title-page");
+            } else {
+                pageContainer.classList.remove("is-title-page");
+            }
+
 
             // make sure the frame is visible
             const pageInner = document.getElementById('pageInner');
@@ -1080,7 +1223,7 @@
             });
 
             // keep bookFrame as flex container (don’t clear it)
-            const bookFrame = document.getElementById('bookFrame');
+            bookFrame = document.getElementById('bookFrame');
             if (bookFrame) {
                 bookFrame.style.display = 'flex';
                 bookFrame.scrollTop = 0;
@@ -1105,10 +1248,6 @@
                 pageIndicator.textContent = `Page ${spineIndex + 1} / ${epubSpine.length}`;
             }
 
-            // Reveal reading area
-            const pageInner = document.getElementById('pageInner');
-            const readerShell = document.getElementById('readerShell');
-            const pageContainer = document.getElementById('pageContainer');
 
             [pageInner, readerShell, pageContainer].forEach(el => {
                 if (el) {
@@ -1119,6 +1258,10 @@
                 }
             });
 
+            bookFrame = document.getElementById("bookFrame");
+            if (bookFrame) {
+                bookFrame.focus();
+            }
         }
 
 
@@ -1222,7 +1365,7 @@
             if (!showingStaticCover) return;
             const cover = document.getElementById("staticCover");
             const pageInner = document.getElementById("pageInner");
-            if (cover) cover.style.display = "none";
+            if (cover) cover.remove();
             if (pageInner) pageInner.style.display = "flex";
             showingStaticCover = false;
             if (epubSpine && epubSpine.length && pageIndicator) {
@@ -1352,11 +1495,64 @@
             }
 
             await loadEpubFile();
-            firstTextSpineIndex = 0;
+            firstTextSpineIndex = epubSpine.findIndex(path =>
+                path.includes("index_split_000")
+            );
 
             if (pageIndicator) {
                 pageIndicator.textContent = "Cover";
             }
+
+            document.addEventListener("click", (e) => {
+                // 1) COVER CLICK
+                const cover = e.target.closest(".static-cover");
+                if (cover && coverShown === 0) {
+                    console.log("[Cover] Click → show title page");
+                    coverShown = 1;
+                    titlePageShown = 0;
+
+                    cover.style.display = "none";
+
+                    const pageInner = document.getElementById("pageInner");
+                    if (pageInner) {
+                        pageInner.style.display = "flex";
+                        pageInner.style.opacity = "1";
+                        pageInner.style.visibility = "visible";
+                    }
+
+                    renderSpinePage(firstTextSpineIndex);
+                    return;
+                }
+
+                // 2) TITLE PAGE CLICK
+                if (
+                    coverShown === 1 &&
+                    titlePageShown === 0 &&
+                    currentSpineIndex === firstTextSpineIndex
+                ) {
+                    console.log("[TitlePage] Click → go to preface");
+                    titlePageShown = 1;
+                    renderSpinePage(firstTextSpineIndex + 1);
+                    return;
+                }
+            });
+
+            // Scrolling function
+            document.addEventListener("wheel", (e) => {
+                if (endnoteOpen === 1 || titlePageShown === 0) {
+                    e.preventDefault();
+                    return;
+                }
+            });
+            document.addEventListener("keydown", (e) => {
+                if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+                    if (endnoteOpen === 1 || titlePageShown === 0) {
+                        e.preventDefault();
+                        return;
+                    }
+                }
+            });
+
         })();
 
 
