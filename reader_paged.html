@@ -192,11 +192,14 @@
             }
 
 
-        #pageContainer p {
-            margin: 0.6rem 0;
-            line-height: 1.5;
-            text-align: justify;
-            text-indent: 1.2em;
+        #pageContainer {
+            display: block !important;
+            opacity: 1 !important;
+            visibility: visible !important;
+            pointer-events: auto !important;
+            z-index: 10 !important;
+            background: #fff !important;
+            color: #222 !important;
         }
         /*
         #pageContainer, #pageContainer * {
@@ -638,24 +641,19 @@
             const cover = document.getElementById('staticCover');
             const img = document.getElementById('staticCoverImg');
 
-            // Set the cover image
             if (img && coverUrl) {
                 img.src = coverUrl;
             }
 
-            // Make sure the cover is visible
             if (cover) {
                 cover.style.display = 'flex';
                 cover.style.opacity = '1';
                 cover.style.pointerEvents = 'auto';
             }
 
-            // On click: hide cover and go to first readable spine item
-            cover.onclick = () => {
-                cover.remove();
-                showPage(firstTextSpineIndex);
-            };
+            // do NOT attach onclick here; coverClickHandler already does that
         }
+
 
 
 
@@ -1063,19 +1061,34 @@
                 console.warn("Image fix failed:", err);
             }
 
+            const container = document.getElementById('pageContainer');
+            if (!container) return;
+
+            // inject XHTML into the dedicated container
+            container.innerHTML = htmlText;
+
+            // make sure the frame is visible
+            const pageInner = document.getElementById('pageInner');
+            const readerShell = document.getElementById('readerShell');
+
+            [pageInner, readerShell, container].forEach(el => {
+                if (!el) return;
+                el.style.display = 'block';
+                el.style.opacity = '1';
+                el.style.visibility = 'visible';
+                el.style.pointerEvents = 'auto';
+            });
+
+            // keep bookFrame as flex container (don’t clear it)
             const bookFrame = document.getElementById('bookFrame');
-            if (!bookFrame) return;
+            if (bookFrame) {
+                bookFrame.style.display = 'flex';
+                bookFrame.scrollTop = 0;
+                bookFrame.style.overflowY = (currentSpineIndex === firstTextSpineIndex)
+                    ? 'hidden'
+                    : 'auto';
+            }
 
-            // Clear previous content
-            bookFrame.innerHTML = "";
-
-            // Create a wrapper for the page
-            const page = document.createElement('div');
-            page.id = 'bookPage';
-            page.innerHTML = htmlText;
-
-            bookFrame.appendChild(page);
-            bookFrame.style.display = 'flex';
 
             // Scroll to top
             bookFrame.scrollTop = 0;
@@ -1334,20 +1347,18 @@
         
         /* ---------------- Initialization ---------------- */
         (async function initReader() {
-
-            staticCoverImg.style.display = "block";
-            pageContainer.style.visibility = "hidden";
-            pageContainer.style.opacity = "0";
-            pageContainer.style.pointerEvents = "none";
-
+            if (staticCoverImg) {
+                staticCoverImg.style.display = "block";
+            }
 
             await loadEpubFile();
-
             firstTextSpineIndex = 0;
 
-            if (pageIndicator) pageIndicator.textContent = "Cover";
-
+            if (pageIndicator) {
+                pageIndicator.textContent = "Cover";
+            }
         })();
+
 
 
     </script>
